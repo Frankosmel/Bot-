@@ -1,13 +1,13 @@
 import json
 import logging
 import os
+from math import ceil
 from threading import Thread
 from flask import Flask, request
 from telegram import (
     Update,
     InlineKeyboardButton,
-    InlineKeyboardMarkup,
-    ReplyKeyboardMarkup
+    InlineKeyboardMarkup
 )
 from telegram.ext import (
     ApplicationBuilder,
@@ -31,41 +31,61 @@ if not os.path.isfile('compras.json'):
     with open('compras.json', 'w') as f:
         json.dump([], f, indent=4)
 
+# Datos de los planes
+PLANS = [
+    ("1 mes – 11 USD", "1m", 11),
+    ("3 meses – 15 USD", "3m", 15),
+    ("1 año – 27 USD", "12m", 27),
+]
+PAGE_SIZE = 2
+TOTAL_PAGES = ceil(len(PLANS) / PAGE_SIZE)
+
 # Flask app para PayPal IPN
 app = Flask(__name__)
 
-# /start command
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_first = update.effective_user.first_name or ""
-    text = (
-        f"👋 ¡Hola {user_first}! Bienvenido a <b>Francho Shop Premium</b>! 🎉\n\n"
-        "Selecciona un plan para comenzar:"
-    )
-    # Teclado inferior con las opciones de plan
-    reply_keyboard = [
-        ["1 mes – 11 USD"],
-        ["3 meses – 15 USD"],
-        ["1 año – 27 USD"],
-    ]
-    markup = ReplyKeyboardMarkup(
-        reply_keyboard,
-        resize_keyboard=True,
-        one_time_keyboard=True
-    )
-    await update.message.reply_text(text, parse_mode="HTML", reply_markup=markup)
+def build_plans_keyboard(page: int):
+    """Construye el inline keyboard para la página dada."""
+    start = (page - 1) * PAGE_SIZE
+    end = start + PAGE_SIZE
+    buttons = []
+    for label, data, _ in PLANS[start:end]:
+        buttons.append([InlineKeyboardButton(label, callback_data=f"plan_{data}")])
+    nav = []
+    if page > 1:
+        nav.append(InlineKeyboardButton("⬅️ Anterior", callback_data=f"page_{page-1}"))
+    if page < TOTAL_PAGES:
+        nav.append(InlineKeyboardButton("Siguiente ➡️", callback_data=f"page_{page+1}"))
+    buttons.append(nav)
+    return InlineKeyboardMarkup(buttons)
 
-# /help command
+async def show_plans(update: Update, context: ContextTypes.DEFAULT_TYPE, page: int = 1):
+    """Envía o edita el menú de planes en la página solicitada."""
+    text = (
+        "🛍️ *Nuestros planes de Telegram Premium* 🛍️\n\n"
+        "Navega entre las páginas para ver todos los planes disponibles. 👇"
+    )
+    markup = build_plans_keyboard(page)
+    if update.callback_query:
+        await update.callback_query.edit_message_text(
+            text, parse_mode="Markdown", reply_markup=markup
+        )
+        await update.callback_query.answer()
+    else:
+        await update.message.reply_markdown(text, reply_markup=markup)
+
+# Comandos de bot
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await show_plans(update, context, page=1)
+
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
-        "ℹ️ <b>Comandos disponibles</b>:\n"
-        "/start – Mostrar menú de compra\n"
-        "/comprobante – Enviar comprobante de pago\n"
+        "ℹ️ *Comandos disponibles*:\n"
+        "/start – Ver planes y precios\n"
         "/miestado – Ver tu historial de compras\n"
         "/help – Mostrar esta ayuda\n"
     )
-    await update.message.reply_text(text, parse_mode="HTML")
+    await update.message.reply_markdown(text)
 
-# /miestado command
 async def estado(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user.username or str(update.effective_user.id)
     with open('compras.json', 'r') as f:
@@ -77,42 +97,40 @@ async def estado(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not user_compras:
         await update.message.reply_text("📭 No tienes compras registradas aún.")
         return
-    lines = ["📑 <b>Tu historial de compras</b>:"]
+    lines = ["📑 *Tu historial de compras*:"]
     for c in user_compras:
         lines.append(f"• {c.get('plan')} - {c.get('price')} USD - {c.get('txn_id')}")
-    await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+    await update.message.reply_markdown("\n".join(lines))
 
-# Handler de texto para selección de plan
-async def plan_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
-    m = {
-        "1 mes – 11 USD": ("1 mes", 11),
-        "3 meses – 15 USD": ("3 meses", 15),
-        "1 año – 27 USD": ("1 año", 27),
-    }
-    plan_label, price = m.get(text, ("Desconocido", 0))
+# Handler de callback de paginación
+async def pagination_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    page = int(query.data.split("_")[1])
+    await show_plans(update, context, page=page)
+
+# Handler de selección de plan
+async def plan_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    _, data = query.data.split("_")
+    # Buscar plan
+    plan_label, _, price = next(p for p in PLANS if p[1] == data)
     link = config.generate_paypal_link(plan_label, price)
-    resp = (
-        f"✅ Has seleccionado <b>{plan_label} – {price} USD</b>\n\n"
-        f"💳 Paga por PayPal aquí: <a href=\"{link}\">Click para pagar</a>\n\n"
-        f"📲 <b>Zelle</b>: {config.ZELLE_NAME} – {config.ZELLE_NUMBER}\n"
-        f"🏦 <b>CUP</b>: {config.CUP_CARD} (1 USD = {config.CUP_RATE} CUP)\n"
-        f"🔒 <b>Confirmación obligatoria</b>: {config.CONFIRM_NUMBER}\n"
-        f"📱 <b>Saldo móvil</b>: {config.MOBILE_NUMBER} (1 USD = {config.MOBILE_RATE} Saldo)\n\n"
-        "Cuando termines, pulsa el botón de abajo para enviar tu comprobante."
+    text = (
+        f"✅ Has seleccionado *{plan_label}* por *{price} USD*.\n\n"
+        f"💳 *Paga con PayPal*:\n[Haz clic aquí]({link})\n\n"
+        f"📲 *Zelle*: {config.ZELLE_NAME} – {config.ZELLE_NUMBER}\n"
+        f"🏦 *CUP*: {config.CUP_CARD} (1 USD = {config.CUP_RATE} CUP)\n"
+        f"🔒 *Confirmación obligatoria*: {config.CONFIRM_NUMBER}\n"
+        f"📱 *Saldo móvil*: {config.MOBILE_NUMBER} (1 USD = {config.MOBILE_RATE} Saldo)\n\n"
+        "Cuando completes el pago, pulsa el botón de abajo para enviar tu comprobante."
     )
-    # Botón inline para enviar comprobante
     inline_kb = InlineKeyboardMarkup(
         [[InlineKeyboardButton("📤 Enviar comprobante", callback_data="send_proof")]]
     )
-    await update.message.reply_text(
-        resp,
-        parse_mode="HTML",
-        disable_web_page_preview=True,
-        reply_markup=inline_kb
-    )
+    await query.edit_message_text(text, parse_mode="Markdown", reply_markup=inline_kb)
 
-# Handler inline para el botón de comprobante
+# Handler inline para enviar comprobante
 async def send_proof_inline(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -120,13 +138,7 @@ async def send_proof_inline(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "📤 Por favor, envía ahora la imagen o documento de tu comprobante de pago."
     )
 
-# /comprobante command (alternativo)
-async def comprobante(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "📤 Por favor, envía aquí la imagen o documento de tu comprobante de pago."
-    )
-
-# Handler de recibo de comprobante (fotos o documentos)
+# Handler de recibo de comprobante
 async def proof_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.photo or update.message.document:
         with open('compras.json', 'r+') as f:
@@ -145,11 +157,11 @@ async def proof_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(
                 chat_id=admin,
                 text=(
-                    "🛎️ <b>Nuevo comprobante recibido</b>\n"
+                    "🛎️ *Nuevo comprobante recibido*\n"
                     f"👤 Usuario: @{update.message.from_user.username}\n"
                     "Envía tu regalo desde @PremiumBot."
                 ),
-                parse_mode="HTML"
+                parse_mode="Markdown"
             )
         await update.message.reply_text("✅ Comprobante recibido. En breve recibirás tu Premium.")
 
@@ -172,13 +184,13 @@ def paypal_ipn():
     from telegram import Bot
     bot = Bot(token=config.TOKEN)
     msg = (
-        "🛍️ <b>Nueva compra registrada</b>\n"
+        "🛍️ *Nueva compra registrada*\n"
         f"Plan: {data.get('item_name')}\n"
         f"Precio: {data.get('mc_gross')} USD\n"
         f"Payer: {data.get('payer_email')}"
     )
     for admin in config.ADMINS:
-        bot.send_message(chat_id=admin, text=msg, parse_mode="HTML")
+        bot.send_message(chat_id=admin, text=msg, parse_mode="Markdown")
     return '', 200
 
 def run_flask():
@@ -187,21 +199,14 @@ def run_flask():
 if __name__ == '__main__':
     # Iniciar Flask en hilo separado
     Thread(target=run_flask).start()
-
     # Construir y arrancar el bot
     bot_app = ApplicationBuilder().token(config.TOKEN).build()
     bot_app.add_handler(CommandHandler("start", start))
     bot_app.add_handler(CommandHandler("help", help_command))
     bot_app.add_handler(CommandHandler("miestado", estado))
-    # Manejar selección de plan con teclado inferior
-    bot_app.add_handler(MessageHandler(
-        filters.Regex(r"^(1 mes – 11 USD|3 meses – 15 USD|1 año – 27 USD)$"),
-        plan_text_handler
-    ))
-    # Botón inline para comprobante
+    bot_app.add_handler(CallbackQueryHandler(pagination_handler, pattern=r"^page_"))
+    bot_app.add_handler(CallbackQueryHandler(plan_handler, pattern=r"^plan_"))
     bot_app.add_handler(CallbackQueryHandler(send_proof_inline, pattern="send_proof"))
-    # Comando alternativo para comprobante
-    bot_app.add_handler(CommandHandler("comprobante", comprobante))
-    # Handler para fotos/documentos como comprobante
+    bot_app.add_handler(CommandHandler("comprobante", lambda u, c: proof_handler(u, c)))
     bot_app.add_handler(MessageHandler(filters.PHOTO | filters.Document.ALL, proof_handler))
     bot_app.run_polling()
