@@ -1,6 +1,7 @@
 TOKEN = "7996381032:AAHGXxjLHdPp1n77RomiRZQO1L0sAzPJIyo"
 ADMINS = [1383931339, 7907625643]
-
+# Usuario de soporte para el comando “Soporte”
+SUPPORT_USERNAME = "frankosme1"
 # PayPal Configuration
 PAYPAL_BUSINESS = "Paypalfrancho@gmail.com"
 PAYPAL_RETURN_URL = "https://t.me/micuenta_ff_id_bot"
