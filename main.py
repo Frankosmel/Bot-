@@ -64,7 +64,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ["🛒 Comprar Premium", "🤝 Invitar amigos"],
         ["💁‍♂️ Soporte", "🔐 Panel Admin"]
     ]
-    # Mostrar “Panel Admin” solo a admins
     if user.id not in config.ADMINS:
         kb[1].remove("🔐 Panel Admin")
     markup = ReplyKeyboardMarkup(kb, resize_keyboard=True, one_time_keyboard=True)
@@ -114,7 +113,9 @@ async def choice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if text == "💁‍♂️ Soporte":
         await update.message.reply_text(
-            f"🛠️ Soporte: @{config.SUPPORT_USERNAME}\nEstamos para ayudarte."
+            f"🛠️ Soporte: <a href=\"https://t.me/{config.SUPPORT_USERNAME}\">@{config.SUPPORT_USERNAME}</a>\n"
+            "Estamos para ayudarte.",
+            parse_mode="HTML"
         )
         return CHOOSING
 
@@ -181,9 +182,10 @@ async def payment_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         price = context.user_data["price"]
         context.user_data["method"] = method
 
+        # Construir texto de pago
         if method == "PayPal":
             link = config.generate_paypal_link(plan, price)
-            pay_text = f"💳 PayPal: {link}"
+            pay_text = f"💳 PayPal: <a href=\"{link}\">Paga aquí</a>"
         elif method == "Zelle":
             pay_text = f"💲 Zelle: {config.ZELLE_NAME} – {config.ZELLE_NUMBER}"
         elif method == "CUP":
@@ -203,9 +205,10 @@ async def payment_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [[InlineKeyboardButton("📤 Enviar comprobante", callback_data="send_proof")]]
         )
         await update.message.reply_text(
-            f"✅ *{plan}* – *{price} USD* via *{method}*\n\n{pay_text}\n\n"
+            f"✅ <b>{plan}</b> – <b>{price} USD</b> via <b>{method}</b>\n\n"
+            f"{pay_text}\n\n"
             "Cuando completes el pago, pulsa el botón de abajo.",
-            parse_mode="Markdown",
+            parse_mode="HTML",
             reply_markup=kb,
             disable_web_page_preview=True,
         )
@@ -220,9 +223,7 @@ async def payment_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def send_proof_inline(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    await query.message.reply_text(
-        "📤 Ahora envía tu comprobante (foto o documento)."
-    )
+    await query.message.reply_text("📤 Ahora envía tu comprobante (foto o documento).")
     return WAIT_PROOF
 
 # ————————————————
@@ -259,7 +260,7 @@ async def proof_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ————————————————
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🔙 Operación cancelada.", 
+        "🔙 Operación cancelada.",
         reply_markup=ReplyKeyboardMarkup([["/start"]], resize_keyboard=True)
     )
     return ConversationHandler.END
@@ -296,6 +297,11 @@ if __name__ == "__main__":
     Thread(target=run_flask).start()
 
     app_bot = ApplicationBuilder().token(config.TOKEN).build()
+
+    # Registrar /help antes del ConversationHandler
+    app_bot.add_handler(CommandHandler("help", help_command))
+    app_bot.add_handler(CommandHandler("miestado", choice_handler))
+
     conv = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
         states={
@@ -311,6 +317,4 @@ if __name__ == "__main__":
         allow_reentry=True,
     )
     app_bot.add_handler(conv)
-    app_bot.add_handler(CommandHandler("help", help_command))
-    app_bot.add_handler(CommandHandler("miestado", choice_handler))  # Admin puede usar para historial
     app_bot.run_polling()
